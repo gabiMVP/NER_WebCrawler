@@ -1,0 +1,325 @@
+import itertools
+import json
+import string
+import re
+import requests
+from bs4 import BeautifulSoup
+from urllib.parse import urlparse
+import pandas as pd
+import xml.etree.ElementTree as ET
+import os
+import numpy as np
+from datasets import Dataset
+from datasets import load_metric
+from transformers import AutoTokenizer
+from transformers import AutoModelForTokenClassification, TrainingArguments, Trainer
+from transformers import DataCollatorForTokenClassification
+import torch
+from ast import literal_eval
+import seqeval
+
+"""
+Since our target sites use SEO we can most likely infer they have robots.txt or sitemaps
+the best way to get the sitemap is from Robots.txt where there will be a link to it 
+in the sitemap will be more links but some for sure will have all the product list, webshops do this for SEO 
+so our webscraper actually is taking the products from the XML of the pages linked in the sitemap
+"""
+
+ROBOTS = '/robots.txt'
+Sitemaps = [
+    '/sitemap.xml',
+    '/sitemap-index.xml'
+    '/sitemap.php'
+    '/sitemap.txt'
+    '/sitemap.xml.gz'
+    '/sitemap/'
+    '/sitemap/sitemap.xml'
+    '/sitemapindex.xml'
+    '/sitemap/index.xml'
+    '/sitemap1.xml'
+]
+headers = {
+    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15'
+}
+
+label_list = ['O', 'I-PRODUCT' , 'B-PRODUCT', 'E-PRODUCT']
+# always use the max label <nr of classes otherwise error at CrossEntropy
+label_encoding_dict = {'O': 0, 'I-PRODUCT': 1, 'B-PRODUCT': 2, 'E-PRODUCT': 3}
+
+task = "ner"
+model_checkpoint = "distilbert-base-uncased"
+batch_size = 16
+
+tokenizer = AutoTokenizer.from_pretrained(model_checkpoint)
+
+
+def main(name):
+    #download site Data only if not provided already
+    data_already_downloaded = True
+    if not data_already_downloaded:
+        df = pd.read_csv('./data/furniture stores pages.csv')
+        df = df.dropna()
+        df_base_URL = df['max(page)'].map(getBasepage)
+        df_base_URL_np = df_base_URL.values
+        datasetList = []
+        # download site data , XML and list of product for each site and put in list
+        for i in range(100):
+            url = df_base_URL_np[i]
+            try:
+                siteData = getTextAndProductsForSite(url)
+                datasetList.append(siteData)
+            except:
+                continue
+        # remove None elements which correspond to sites that give connection exception
+        datasetListCleanNone = [i for i in datasetList if i is not None]
+        # save data as JSON
+        with open("datasetRaw1.json", "w") as outfile:
+            json.dump(datasetListCleanNone, outfile)
+    #preprocess to Input Output form only if not already done or new data
+    data_already_preprocessed = True
+    if not data_already_preprocessed:
+        with open('datasetRaw1.json') as user_file:
+            parsed_json = json.load(user_file)
+        inputs, tags = [], []
+        # from the downloaded data pre process in Input Output form
+        for siteDict in parsed_json:
+            list_xmls = siteDict['string_page']
+            list_product_per_xml = siteDict['products_page']
+            lenght = len(list_xmls)
+            for i in range(lenght):
+                current_xml = list_xmls[i]
+                current_product_found = list_product_per_xml[i]
+                input, tag = getInputOutputNotTokenized(current_xml, current_product_found)
+                inputs.extend(input)
+                tags.extend(tag)
+        # save data to CVS
+        trainDF = pd.DataFrame({'tokens': inputs, 'ner_tags': tags})
+        trainDF.to_csv('data10Sites.csv', index=False, encoding='utf-8')
+    # Data is ready here
+    trainDF = pd.read_csv('data10Sites.csv', encoding='utf-8')
+    # we use literal_eval because when the CVS is saved list of strings becomes String in each entry
+    trainDF['tokens'] = trainDF['tokens'].apply(literal_eval)
+    trainDF['ner_tags'] = trainDF['ner_tags'].apply(literal_eval)
+
+    dfSize = trainDF.shape[0]
+    trainSize = dfSize * 0.90
+    trainSize = int(trainSize)
+
+    df_train = trainDF.iloc[:trainSize, :]
+    df_test = trainDF.iloc[trainSize:, :]
+    assert (df_test.shape[0] + df_train.shape[0] == dfSize)
+    train_dataset = Dataset.from_pandas(df_train)
+    test_dataset = Dataset.from_pandas(df_test)
+    train_tokenized_datasets = train_dataset.map(tokenize_and_align_labels, batched=True)
+    test_tokenized_datasets = test_dataset.map(tokenize_and_align_labels, batched=True)
+    id2label = {
+        0: "O",
+        1: "I-PRODUCT",
+        2:'B-PRODUCT',
+        3:'E-PRODUCT'
+    }
+    label2id = {
+        "O": 0,
+        "I-PRODUCT": 1,
+        'B-PRODUCT': 2,
+        'E-PRODUCT': 3
+    }
+    model = AutoModelForTokenClassification.from_pretrained(model_checkpoint, num_labels=len(label_list),
+                                                            id2label=id2label, label2id=label2id)
+
+    args = TrainingArguments(
+        f"test-{task}",
+        evaluation_strategy="epoch",
+        learning_rate=1e-4,
+        per_device_train_batch_size=batch_size,
+        per_device_eval_batch_size=batch_size,
+        num_train_epochs=3,
+        weight_decay=1e-5,
+    )
+
+    data_collator = DataCollatorForTokenClassification(tokenizer)
+    metric = load_metric("seqeval")
+
+    def compute_metrics(p):
+        predictions, labels = p
+        predictions = np.argmax(predictions, axis=2)
+
+        true_predictions = [[label_list[p] for (p, l) in zip(prediction, label) if l != -100] for prediction, label in
+                            zip(predictions, labels)]
+        true_labels = [[label_list[l] for (p, l) in zip(prediction, label) if l != -100] for prediction, label in
+                       zip(predictions, labels)]
+
+        results = metric.compute(predictions=true_predictions, references=true_labels)
+        return {"precision": results["overall_precision"], "recall": results["overall_recall"],
+                "f1": results["overall_f1"], "accuracy": results["overall_accuracy"]}
+
+    trainer = Trainer(
+        model,
+        args,
+        train_dataset=train_tokenized_datasets,
+        eval_dataset=test_tokenized_datasets,
+        data_collator=data_collator,
+        tokenizer=tokenizer,
+        compute_metrics=compute_metrics
+    )
+
+    trainer.train()
+    trainer.evaluate()
+    trainer.save_model('un-ner.model')
+
+
+#  same code as huggingface  https://huggingface.co/docs/transformers/tasks/token_classification
+def tokenize_and_align_labels(examples):
+    label_all_tokens = True
+    tokenized_inputs = tokenizer(list(examples["tokens"]), truncation=True, is_split_into_words=True)
+
+    labels = []
+    for i, label in enumerate(examples[f"{task}_tags"]):
+        word_ids = tokenized_inputs.word_ids(batch_index=i)
+        previous_word_idx = None
+        label_ids = []
+        for word_idx in word_ids:
+            if word_idx is None:
+                label_ids.append(-100)
+            elif label[word_idx] == '0':
+                label_ids.append(0)
+            elif word_idx != previous_word_idx:
+                label_ids.append(label_encoding_dict[label[word_idx]])
+            else:
+                label_ids.append(label_encoding_dict[label[word_idx]] if label_all_tokens else -100)
+            previous_word_idx = word_idx
+        labels.append(label_ids)
+
+    tokenized_inputs["labels"] = labels
+    return tokenized_inputs
+
+
+def getInputOutputNotTokenized(xml, list_product_per_xml):
+    input = []
+    tags = []
+    xml_string = xml[0]
+    lines = xml_string.split('\n')
+    # string_no_XML_tags  = BeautifulSoup(xml_string, "xml").getText()
+    # lines1 = string_no_XML_tags.split('\n')
+    last_index = 0
+    product_len = len(list_product_per_xml) - 1
+    for i, text in enumerate(lines):
+        if last_index > product_len:
+            break
+        product = list_product_per_xml[last_index]
+        # this BeautifulSoup is there just to handle HTML entities because these can happen and the texts won't match
+        text1 = BeautifulSoup(text, "xml")
+        # we add a space before starting and closing tag so text split " " can split without removing the <>
+        text = text.replace("<", " <")
+        text = text.replace(">", "> ")
+        textList = text.split(" ")
+        # remove empty space that be create by adding space
+        textList = [N for N in textList if N != ""]
+        if product in text or product in text1.getText():
+            last_index += 1
+            textToAdd = text1.getText().split(" ")
+            input.append(textToAdd)
+            # tags.append(['PRODUCT'] * len(textToAdd))
+            listProduct = ['I-PRODUCT'] * len(textToAdd)
+            listProduct[0] = 'B-PRODUCT'
+            listProduct[-1] = 'E-PRODUCT'
+            tags.append(listProduct)
+        else:
+            input.append(textList)
+            tags.append(['O'] * len(textList))
+
+        # if product in text or  product in text1 :
+        #     last_index+=1
+        #     input.append(text)
+        #     tags.append('PRODUCT')
+        # else:
+        #     input.append(text)
+        #     tags.append('O')
+
+    return input, tags
+
+
+def getTextAndProductsForSite(url):
+    try:
+        requests.get(url, headers=headers)
+    except:
+        print("site" + url + "is down")
+        return
+    urlRobots = url + ROBOTS
+    r = requests.get(urlRobots, headers=headers)
+    m2 = BeautifulSoup(r.content, "html.parser")
+    listProp = m2.text.split('\n')
+    sitemap = extractSiteMapfromRobotsTxt(listProp)
+    if '' == sitemap:
+        sitemap = tryKnownSitepath(url)
+        if '' == sitemap:
+            print("could not get data for site :" + url)
+            # break for loop since we dont know the sitepath
+            return
+
+    r1 = requests.get(sitemap, headers=headers)
+    sitemapXml = BeautifulSoup(r1.content, "xml", from_encoding='utf-8')
+    # in sitemap we have links we go in one by one,  some of these will contain the products
+    listpaths = sitemapXml.findAll('loc')
+    stringsPage = []
+    products_page = []
+    dictList = []
+    for mainpath in listpaths:
+        r = requests.get(mainpath.text, headers=headers)
+        responsemainPage = BeautifulSoup(r.content, "xml")
+        x1 = responsemainPage.findAll("title")
+        # string_page = [responsemainPage.getText()]
+        string_page = [str(responsemainPage)]
+        product_page = [str(x.getText()) for x in x1]
+        stringsPage.append(string_page)
+        products_page.append(product_page)
+        # dict ={
+        #     "string_pageX": string_page,
+        #     "products_pageX": product_page
+        # }
+        # dictList.append(dict)
+
+    if len(stringsPage) == 0 or len(products_page) == 0:
+        return None
+    return {
+        "string_page": stringsPage,
+        "products_page": products_page,
+        # "dict":dictList
+    }
+
+
+def extractSiteMapfromRobotsTxt(listProp):
+    sitemap = ''
+    for line in listProp:
+        try:
+            l1 = line.split(' ')
+            if l1[0] == 'Sitemap:':
+                sitemap = l1[1]
+        except:
+            pass
+    if sitemap == "":
+        # use sitemap list
+        pass
+    return sitemap
+
+
+def getBasepage(link):
+    parsed = urlparse(link)
+    base = parsed.netloc
+    scheme = parsed.scheme
+    page = scheme + '://' + base
+    return page
+
+
+def tryKnownSitepath(url):
+    for sitePath in Sitemaps:
+        urltried = url + sitePath
+        r1 = requests.get(urltried)
+        if (r1.status_code == 200):
+            return urltried
+    return ""
+
+
+# Press the green button in the gutter to run the script.
+if __name__ == '__main__':
+    main('PyCharm')
