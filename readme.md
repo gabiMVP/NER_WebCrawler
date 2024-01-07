@@ -161,5 +161,5 @@ Roberta gives us a higher F1 score of 	0.990366  which would be even higher if w
 B-PRODUCT , I-PRODUCT , E-PRODUCT
  to just PRODUCT.
 
-The code is most readable in the ipynb files
+
 
