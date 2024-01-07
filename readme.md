@@ -151,10 +151,10 @@ summarize:mage:title>Firms Bedside Table</image:title>
 <url>
 <loc>ht
 
-+ summary_model
-
++ summaryModel  
 <pad> Bayon Salmon Pink Scatter Cushion</s>
 ```
+
 ### Notes
 I used Google Colab to train the models , the Jupyter Notebooks are in the project files
 Roberta gives us a higher F1 score of 	0.990366  which would be even higher if we converted all tags from 
