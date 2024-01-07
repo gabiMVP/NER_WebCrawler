@@ -42,7 +42,7 @@ headers = {
     'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15'
 }
 
-label_list = ['O', 'I-PRODUCT' , 'B-PRODUCT', 'E-PRODUCT']
+label_list = ['O', 'I-PRODUCT', 'B-PRODUCT', 'E-PRODUCT']
 # always use the max label <nr of classes otherwise error at CrossEntropy
 label_encoding_dict = {'O': 0, 'I-PRODUCT': 1, 'B-PRODUCT': 2, 'E-PRODUCT': 3}
 
@@ -50,11 +50,10 @@ task = "ner"
 model_checkpoint = "distilbert-base-uncased"
 batch_size = 16
 
-tokenizer = AutoTokenizer.from_pretrained(model_checkpoint)
-
 
 def main(name):
-    #download site Data only if not provided already
+    tokenizer = AutoTokenizer.from_pretrained(model_checkpoint)
+    # download site Data only if not provided already
     data_already_downloaded = True
     if not data_already_downloaded:
         df = pd.read_csv('./data/furniture stores pages.csv')
@@ -75,17 +74,20 @@ def main(name):
         # save data as JSON
         with open("datasetRaw1.json", "w") as outfile:
             json.dump(datasetListCleanNone, outfile)
-    #preprocess to Input Output form only if not already done or new data
+
+    # preprocess to Input Output form only if not already done or new data
     data_already_preprocessed = True
     if not data_already_preprocessed:
         with open('datasetRaw1.json') as user_file:
             parsed_json = json.load(user_file)
         inputs, tags = [], []
         # from the downloaded data pre process in Input Output form
+
         for siteDict in parsed_json:
             list_xmls = siteDict['string_page']
             list_product_per_xml = siteDict['products_page']
             lenght = len(list_xmls)
+
             for i in range(lenght):
                 current_xml = list_xmls[i]
                 current_product_found = list_product_per_xml[i]
@@ -93,10 +95,11 @@ def main(name):
                 inputs.extend(input)
                 tags.extend(tag)
         # save data to CVS
-        trainDF = pd.DataFrame({'tokens': inputs, 'ner_tags': tags})
-        trainDF.to_csv('data10Sites.csv', index=False, encoding='utf-8')
+        trainDF = pd.DataFrame({'text': inputs, 'summary': tags})
+        trainDF.to_csv('data100SitesNEW_trunc.csv', index=False, encoding='utf-8')
+
     # Data is ready here
-    trainDF = pd.read_csv('data10Sites.csv', encoding='utf-8')
+    trainDF = pd.read_csv('data100SitesNEW_trunc.csv', encoding='utf-8')
     # we use literal_eval because when the CVS is saved list of strings becomes String in each entry
     trainDF['tokens'] = trainDF['tokens'].apply(literal_eval)
     trainDF['ner_tags'] = trainDF['ner_tags'].apply(literal_eval)
@@ -115,8 +118,8 @@ def main(name):
     id2label = {
         0: "O",
         1: "I-PRODUCT",
-        2:'B-PRODUCT',
-        3:'E-PRODUCT'
+        2: 'B-PRODUCT',
+        3: 'E-PRODUCT'
     }
     label2id = {
         "O": 0,
@@ -165,11 +168,68 @@ def main(name):
 
     trainer.train()
     trainer.evaluate()
-    trainer.save_model('un-ner.model')
+    trainer.save_model('variant.model')
+
+    # Sanity check on some example from dataset
+    pathSaved = '/content/DistilBertNER.model'
+    tokenizer = AutoTokenizer.from_pretrained(pathSaved)
+    sample = df_test.iloc[19]
+    sample_text = sample['tokens']
+    sample_tags = sample['ner_tags']
+
+    sample_text = str(sample_text)
+    print("sample_text" + sample_text)
+    tokens = tokenizer(sample_text)
+    torch.tensor(tokens['input_ids']).unsqueeze(0).size()
+
+    model = AutoModelForTokenClassification.from_pretrained(pathSaved, num_labels=len(label_list))
+    predictions = model.forward(input_ids=torch.tensor(tokens['input_ids']).unsqueeze(0),
+                                attention_mask=torch.tensor(tokens['attention_mask']).unsqueeze(0))
+    predictions = torch.argmax(predictions.logits.squeeze(), axis=1)
+    print("pred :" + str(predictions))
+    predictions = [label_list[i] for i in predictions]
+    print("pred :" + str(predictions))
+
+    words = tokenizer.batch_decode(tokens['input_ids'])
+    x = pd.DataFrame({'ner': predictions, 'words': words}).to_csv('BERT.csv')
+    x = pd.DataFrame({'ner': predictions, 'words': words})
+    print(x)
+
+    # Sanity check on a never before seen site
+    pageTest = 'https://vauntdesign.com/'
+    siteData = getTextAndProductsForSite(pageTest)
+    print(siteData['string_page'][0])
+    print(siteData['products_page'][0])
+
+    tokenizer = AutoTokenizer.from_pretrained(pathSaved)
+
+    paragraph = str(BeautifulSoup(siteData['string_page'][0][0], "xml"))
+    paragraph = paragraph[500:1024]
+    print("paragraph:" + paragraph)
+    list_lines = paragraph.split("\n")
+    tokens = tokenizer.batch_encode_plus(list_lines)
+    dataFrame = pd.DataFrame()
+    print(tokens)
+    model = AutoModelForTokenClassification.from_pretrained(pathSaved, num_labels=len(label_list))
+    # since in training the model saw only line per line of the xml we have to preprocess and give it the input in the same format
+    # with full paragraph the results are not as good
+    for i, line in enumerate(tokens['input_ids']):
+        print(i)
+        print(line)
+        predictions = model.forward(input_ids=torch.tensor(tokens['input_ids'][i]).unsqueeze(0),
+                                    attention_mask=torch.tensor(tokens['attention_mask'][i]).unsqueeze(0))
+        predictions = torch.argmax(predictions.logits.squeeze(), axis=1)
+        predictions = [label_list[i] for i in predictions]
+        words = tokenizer.batch_decode(tokens['input_ids'][i])
+        df1 = pd.DataFrame({'ner': predictions, 'words': words})
+        print(df1)
+        dataFrame = pd.concat([dataFrame, df1], axis=0)
+    x = dataFrame.to_csv('BERT.csv')
 
 
 #  same code as huggingface  https://huggingface.co/docs/transformers/tasks/token_classification
 def tokenize_and_align_labels(examples):
+    tokenizer = AutoTokenizer.from_pretrained(model_checkpoint)
     label_all_tokens = True
     tokenized_inputs = tokenizer(list(examples["tokens"]), truncation=True, is_split_into_words=True)
 
@@ -218,24 +278,27 @@ def getInputOutputNotTokenized(xml, list_product_per_xml):
         if product in text or product in text1.getText():
             last_index += 1
             textToAdd = text1.getText().split(" ")
-            input.append(textToAdd)
+            # input.append(textToAdd)
+            idx_start = text.find(textToAdd[0])
+            idx_end = text.rfind(textToAdd[-1]) + len(textToAdd[-1])
+            string_before_target = "".join(text[0:idx_start])
+            string_after_target = "".join(text[idx_end:])
+            list_string_before_target = string_before_target.split(' ')
+            list_string_after_target = string_after_target.split(' ')
+            list_string_before_target = [N for N in list_string_before_target if N != ""]
+            list_string_after_target = [N for N in list_string_after_target if N != ""]
+            tags_beggining = ['O'] * len(list_string_before_target)
+            tags_end = ['O'] * len(list_string_after_target)
+            input.append(list_string_before_target + textToAdd + list_string_after_target)
             # tags.append(['PRODUCT'] * len(textToAdd))
             listProduct = ['I-PRODUCT'] * len(textToAdd)
             listProduct[0] = 'B-PRODUCT'
             listProduct[-1] = 'E-PRODUCT'
-            tags.append(listProduct)
+            # tags.append(listProduct)
+            tags.append(tags_beggining + listProduct + tags_end)
         else:
             input.append(textList)
             tags.append(['O'] * len(textList))
-
-        # if product in text or  product in text1 :
-        #     last_index+=1
-        #     input.append(text)
-        #     tags.append('PRODUCT')
-        # else:
-        #     input.append(text)
-        #     tags.append('O')
-
     return input, tags
 
 

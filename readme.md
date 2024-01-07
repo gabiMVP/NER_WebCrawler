@@ -3,7 +3,10 @@
 The purpose is to do Name Entity Recognition where there is only one entity:Product 
 
 Here I did fine-tuning using the standard distilbert model and also trying with xlm-roberta-base
+
 These pretrained models are taken from the Huggingface 
+
+Also since there is only 1 entity I tried to convert the problem from a NER problem to a Summarization problem 
 
 ### Dataset Aquisition
 Our list of sites from where we get the products are Web shops.Web shops do a lot of SEO to be seen 
@@ -36,8 +39,12 @@ We then associate for each word in the line a NER tag.
 The final dataset is in the form of a CVS file which has the structure:
 List of words of words of line | List of NER tags associated for those words of line
 
-<img src="./dataframe.png" alt="Confusion Matrix" />
+<img src="./dataframe.png" alt="dataframeDebug" />
 
+The training data for both implementations is the CVS file data100SitesNEW_trunc.csv
+which has 800000 + pairs of words and ner tags per word each corresponding to 1 sentence(
+in our case corresponding to 1 line in the site XML file 
+)
 ### Implementation notes:
 
 I did the same implementation as presented in this link:
@@ -55,17 +62,102 @@ that is why I used the standards suffixes for the labels
 - I-PRODUCT    where I prefix as Mid word of product 
 - E-PRODUCT    where E prefix as End word of product 
 
-The models were fine tunned only on 244008 input output pairs corresponding to the data in data10Sites.csv
 
 ### Results Bert:
 
 | Epoch | Training_Loss | Validation_Loss | Precision | Recall    | F1_score  |Accuracy|
 |-------|---------------|-----------------|-----------|-----------|-----------|-----------|
-| 1     | 	0.000500     | 	0.007317       | 	0.963814 | 	0.942717 | 	0.953149 |	0.996491 |
-| 2     | 	0.000200     | 	0.013572       | 	0.982870 | 	0.988706 | 	0.985780 |	0.998216 |
-| 3     | 	0.000100     | 	0.013838       | 	0.980622 | 	0.983933 | 	0.982275 |	0.998172 |
+| 1     | 	0.011200     | 	0.006536      | 	0.934946 | 	0.943322| 	0.939116|	0.998801 |
+| 2     | 	0.009000  | 	0.006715     | 	0.942702| 	0.942487 |	0.942595|	0.998699 |
 
+
+### Results Roberta:
+
+| Epoch | Training_Loss | Validation_Loss | Precision | Recall    | F1_score  |Accuracy|
+|-------|---------------|-----------------|-----------|-----------|-----------|-----------|
+| 1     | 0.018900      | 	0.012661      | 	0.992290 | 	0.981397| 	0.986813 |	0.999439|
+| 2     | 	0.012600   | 	0.004301       | 	0.987655 | 	0.993092 | 	0.990366|	0.999418|
+
+
+to get such good results we have to preprocess the input as we did for extracting it
+meaning passing it line by line in the model , a large chuck of site text will not produce the same results
+
+results can be seen in trainingResults folder where each model is given a never before seen site,
+downloads the site data and processes it outputing the NER tags in a CVS
+
+
+### Extra Approach ---  Summarizaion  
+
+Since we have only 1 entity we can also consider this problem as a Summarizaion problem.
+We are given the site xml file and we have to extract from it the products 
+
+in this approach I modified the dataset preprocessing step and created a new Dataframe
+
+<img src="./DataSummaryDebug.png" alt="dataframeDebugSummary" />
+
+here a chunk of text input is created in a for loop each time the target is found in the text
+
+example text:  
+"<?xml version=""1.0"" encoding=""utf-8""?><urlset xmlns=""http://www.sitemaps.org/schemas/sitemap/0.9"" xmlns:image=""http://www.google.com/schemas/sitemap-image/1.1""><url><loc>https://www.factorybuys.com.au/</loc><changefreq>daily</changefreq></url><url><loc>https://www.factorybuys.com.au/products/2-x-premium-white-leather-bar-stools</loc><lastmod>2023-12-08T02:02:38+10:00</lastmod><changefreq>daily</changefreq><image:image><image:loc>https://cdn.shopify.com/s/files/1/1293/8737/products/BA-TW-NEW4045-WHX2-07.jpg?v=1670981706</image:loc><image:title>Set of 2 Liosia PU Leather Patterned Bar Stools - White &amp; Chrome</image:title>"  
+target  
+:Set of 2 Liosia PU Leather Patterned Bar Stools - White & Chrome
+
+
+The benefit of this approach is that it can take in a full chunck of text and do well as long as we dont exceed the max input len of the model
+
+Here I used T5 with Pytorch Lighting and got a good Rouge-L score
+
+We add the prefix "summarize:"  to the input text as this is how the model was originally trained 
+
+As evaluation, I took 1000 pairs of text and targets and got a rougeL score of 0.8929364
+
+If we look at the summary the model creates its pretty good
+Examples from training set : 
+
+<span style="color:green">input_text</span>  
+summarize: <image:caption/></image:image></url><url><loc>https://www.factorybuys.com.au/products/30-inch-portable-fire-pit-free-shipping</loc><lastmod>2023-12-08T02:02:38+10:00</lastmod><changefreq>daily</changefreq><image:image><image:loc>https://cdn.shopify.com/s/files/1/1293/8737/products/FPIT-UFO-7676-99.jpg?v=1657623092</image:loc><image:title>Fire Pit BBQ Charcoal Grill Smoker Portable Outdoor Camping Garden Pits 30"</image:title>  
+<span style="color:yellow">summary_original</span>  
+Fire Pit BBQ Charcoal Grill Smoker Portable Outdoor Camping Garden Pits 30"  
+<span style="color:red">summaryModel</span>   
+<pad> Fire Pit BBQ Charcoal Grill Smoker Portable Outdoor Camping Garden Pits 30"</s>  
+<span style="color:green">input_text</span>  
+summarize: <image:caption/></image:image></url><url><loc>https://www.factorybuys.com.au/products/4-shelf-greenhouse-with-cover</loc><lastmod>2023-12-08T02:02:38+10:00</lastmod><changefreq>daily</changefreq><image:image><image:loc>https://cdn.shopify.com/s/files/1/1293/8737/products/GH-MINI-4T-TP-00.jpg?v=1608193835</image:loc><image:title>Greenhouse Garden Shed Tunnel Plant Green House Storage Plant Lawn</image:title>  
+<span style="color:yellow">summary_original</span>  
+Greenhouse Garden Shed Tunnel Plant Green House Storage Plant Lawn  
+<span style="color:red">summaryModel</span>   
+<pad> Greenhouse Garden Shed Tunnel Plant Green House Storage Plant Lawn</s>  
+
+
+###Summary on a never before seen site:
+
+<span style="color:yellow">Site text </span>
+
+summarize:mage:title>Firms Bedside Table</image:title>
+<image:caption/>
+</image:image>
+</url>
+<url>
+<loc>https://vauntdesign.com/products/bayon-salmon-pink-scatter-cushion</loc>
+<lastmod>2024-01-07T21:42:48+00:00</lastmod>
+<changefreq>daily</changefreq>
+<image:image>
+<image:loc>https://cdn.shopify.com/s/files/1/2001/3223/products/Salmonpinkcushion.jpg?v=1610199728</image:loc>
+<image:title>Bayon Salmon Pink Scatter Cushion</image:title>
+<image:caption>Salmon pink scatter cushion</image:caption>
+</image:image>
+</url>
+<url>
+<loc>ht
+
+<span style="color:red">summary</span>
+
+<pad> Bayon Salmon Pink Scatter Cushion</s>
 
 ### Notes
 I used Google Colab to train the models , the Jupyter Notebooks are in the project files
+Roberta gives us a higher F1 score of 	0.990366  which would be even higher if we converted all tags from 
+B-PRODUCT , I-PRODUCT , E-PRODUCT
+ to just PRODUCT.
+
+The code is most readable in the ipynb files
 
