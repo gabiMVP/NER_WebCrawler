@@ -114,23 +114,25 @@ As evaluation, I took 1000 pairs of text and targets and got a rougeL score of 0
 If we look at the summary the model creates its pretty good
 Examples from training set : 
 
-<span style="color:green">input_text</span>  
+```diff
+#input_text
 summarize: <image:caption/></image:image></url><url><loc>https://www.factorybuys.com.au/products/30-inch-portable-fire-pit-free-shipping</loc><lastmod>2023-12-08T02:02:38+10:00</lastmod><changefreq>daily</changefreq><image:image><image:loc>https://cdn.shopify.com/s/files/1/1293/8737/products/FPIT-UFO-7676-99.jpg?v=1657623092</image:loc><image:title>Fire Pit BBQ Charcoal Grill Smoker Portable Outdoor Camping Garden Pits 30"</image:title>  
-<span style="color:yellow">summary_original</span>  
+- summary_original 
 Fire Pit BBQ Charcoal Grill Smoker Portable Outdoor Camping Garden Pits 30"  
-<span style="color:red">summaryModel</span>   
++ summaryModel  
 <pad> Fire Pit BBQ Charcoal Grill Smoker Portable Outdoor Camping Garden Pits 30"</s>  
-<span style="color:green">input_text</span>  
+#input_text
 summarize: <image:caption/></image:image></url><url><loc>https://www.factorybuys.com.au/products/4-shelf-greenhouse-with-cover</loc><lastmod>2023-12-08T02:02:38+10:00</lastmod><changefreq>daily</changefreq><image:image><image:loc>https://cdn.shopify.com/s/files/1/1293/8737/products/GH-MINI-4T-TP-00.jpg?v=1608193835</image:loc><image:title>Greenhouse Garden Shed Tunnel Plant Green House Storage Plant Lawn</image:title>  
-<span style="color:yellow">summary_original</span>  
+- summary_original 
 Greenhouse Garden Shed Tunnel Plant Green House Storage Plant Lawn  
-<span style="color:red">summaryModel</span>   
++ summaryModel  
 <pad> Greenhouse Garden Shed Tunnel Plant Green House Storage Plant Lawn</s>  
 
+```
 
 ###Summary on a never before seen site:
-
-<span style="color:yellow">Site text </span>
+```diff
+#iSite text
 
 summarize:mage:title>Firms Bedside Table</image:title>
 <image:caption/>
@@ -149,10 +151,10 @@ summarize:mage:title>Firms Bedside Table</image:title>
 <url>
 <loc>ht
 
-<span style="color:red">summary</span>
++ summary_model
 
 <pad> Bayon Salmon Pink Scatter Cushion</s>
-
+```
 ### Notes
 I used Google Colab to train the models , the Jupyter Notebooks are in the project files
 Roberta gives us a higher F1 score of 	0.990366  which would be even higher if we converted all tags from 
